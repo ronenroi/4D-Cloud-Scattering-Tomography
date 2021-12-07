@@ -1231,10 +1231,18 @@ C      that calculated from a high resolution ordinate set (NMU2 mu's).
 C       Find the minimum wind speed and pigment content in ocean surface
       WINDSPD = 1000.0
       PIGMENT = 1.0E6
+      WRITE (6,*) ' WINDSPD',
+     .              '   [', WINDSPD,']'
+      WRITE (6,*) ' PIGMENT',
+     .              '   [', PIGMENT,']'
       DO IY = 1, NYSFC
         DO IX = 1, NXSFC
           WINDSPD = MIN(WINDSPD,SFCPARMS(2,IX,IY))
           PIGMENT = MIN(PIGMENT,SFCPARMS(3,IX,IY))
+                         WRITE (6,*) ' WINDSPD',
+     .              '   [', WINDSPD,']'
+                              WRITE (6,*) ' PIGMENT',
+     .              '   [', PIGMENT,']'
         ENDDO
       ENDDO
       IF (WINDSPD .LT. 0.5) THEN
@@ -1591,10 +1599,9 @@ C     outgoing radiance (RAD) at the point X0,Y0,Z0.
       REAL    DIRFLUX(NPTS), LEGEN(0:NLEG,NPTS)
       REAL    SOURCE(*), TOTAL_EXT(NPTS)
       REAL    YLMDIR(NLM), YLMSUN(NLM), SINGSCAT(NUMPHASE)
-      REAL    RADOUT
       DOUBLE PRECISION SUNDIRLEG(0:NLEG)
-      DOUBLE PRECISION MURAY, PHIRAY, MU2, PHI2
-      DOUBLE PRECISION X0, Y0, Z0
+      REAL    RADOUT
+      DOUBLE PRECISION X0, Y0, Z0,MURAY, PHIRAY, MU2, PHI2
       CHARACTER SRCTYPE*1, SFCTYPE*2
 
 
