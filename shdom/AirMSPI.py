@@ -1,9 +1,14 @@
-import h5py, os, cv2, glob
+import h5py, os, glob
+
+import pandas as pd
 import numpy as np
 import shdom
 from datetime import datetime
 import matplotlib.pyplot as plt
-
+from scipy.optimize import minimize_scalar
+from skimage import filters
+import scipy.stats as sci_stat
+from scipy import interpolate
 
 class AirMSPIMeasurements(shdom.Measurements):
     """
@@ -28,10 +33,13 @@ class AirMSPIMeasurements(shdom.Measurements):
         self._region_of_interest = None
         self._paths = None
         self._set_valid_wavelength_range = None
-        self.cloud_base = 0
-        self.cloud_top = 1
+        self.cloud_base_h = 0.8
+        self.cloud_max_h = 2
         self._bb = None
         self._relative_coordinates = None
+        self._est_albedo_list = None
+        self._est_wind_list = None
+        self._center_of_mass = []
         if images is not None:
             self._region_of_interest = [0, images[0].shape[0], 0, images[0].shape[1]]
         if wavelength is not None:
@@ -53,6 +61,7 @@ class AirMSPIMeasurements(shdom.Measurements):
             ----------
             The method uses OpenCV package with can have problem in certain versions.
         """
+        import cv2
         format_ = '*.hdf'  # load
         path = sorted(glob.glob(directory + '/' + format_))[index]
         f = h5py.File(path, 'r')
@@ -95,7 +104,7 @@ class AirMSPIMeasurements(shdom.Measurements):
         format_ = '*.hdf'
         paths = sorted(glob.glob(directory + '/' + format_))
         images = []
-        if index > 0 and index < len(paths):
+        if index >= 0 and index < len(paths):
             paths=[paths[index]]
         for path in paths:
             f = h5py.File(path, 'r')
@@ -141,21 +150,28 @@ class AirMSPIMeasurements(shdom.Measurements):
             Read sun's parameters for the optimization.
 
         """
+        sun_azimuth_list = []
+        sun_zenith_list = []
         for path, roi in zip(self._paths,self._region_of_interest):
             f = h5py.File(path, 'r')
             channels_data = f['HDFEOS']['GRIDS']
-            sun_azimuth_list = []
-            sun_zenith_list = []
             for param_name, param in channels_data.items():
                 if "band" in param_name:
                     if int(param_name[0:3]) in self._valid_wavelength:
                         sun_azimuth = param['Data Fields']['Sun_azimuth'][roi[0]:roi[1], roi[2]:roi[3]]
                         sun_zenith = param['Data Fields']['Sun_zenith'][roi[0]:roi[1], roi[2]:roi[3]]
-                        sun_azimuth_list.append(np.mean(sun_azimuth))
-                        sun_zenith_list.append(180 - np.mean(sun_zenith))
+                        sun_azimuth = sun_azimuth[sun_azimuth >= 0]
+                        sun_zenith = sun_zenith[sun_zenith >= 0]
+                        sun_azimuth_list.append(sci_stat.circmean(np.array(sun_azimuth).ravel(),high=360))
+                        sun_zenith_list.append(180 - sci_stat.circmean(np.array(sun_zenith).ravel(),high=360))
 
-            self._sun_azimuth_list = sun_azimuth_list
-            self._sun_zenith_list = sun_zenith_list
+        self._sun_azimuth_list = sun_azimuth_list
+        self._sun_zenith_list = sun_zenith_list
+
+    def calc_cloud_base_height(self, image_index, cloud_pix, shadow_pix):
+        r = np.sum((np.array(cloud_pix) - np.array(shadow_pix)) ** 2) ** 0.5
+        cloud_base_h = r / np.tan(np.deg2rad(180 - self.sun_zenith_list[image_index])) * 10 #10m AirMSPI resolution
+        return cloud_base_h
 
     def load_from_hdf(self, data_dir, region_of_interest,
                       valid_wavelength=[355, 380, 445, 470, 555, 660, 865, 935], sensor_type='Radiance'):
@@ -194,6 +210,9 @@ class AirMSPIMeasurements(shdom.Measurements):
         self.set_images()
         self._pixels = self.images_to_pixels(self.images)
         self.set_sun_params()
+        # self.calc_albedo(n_jobs=72)
+        # self.calc_wind(n_jobs=72)
+        self.check_glint_angle()
 
     def set_region_of_interest(self, region_of_interest):
         """
@@ -205,6 +224,7 @@ class AirMSPIMeasurements(shdom.Measurements):
                 [xmin, xmax, ymin, ymax] to set the image's domain limits
         """
         assert len(region_of_interest) == len(self._paths)
+        mask_list = []
         for path, roi in zip(self._paths,region_of_interest):
             f = h5py.File(path, 'r')
             channels_data = f['HDFEOS']['GRIDS']
@@ -213,8 +233,14 @@ class AirMSPIMeasurements(shdom.Measurements):
                     if int(param_name[0:3]) in self._valid_wavelength:
                         mask = np.array(param['Data Fields']['I.mask'][roi[0]:roi[1],
                                         roi[2]:roi[3]])
-                        assert np.all(mask == 1), 'Invalid region of interest'
+                        I = np.array(param['Data Fields']['I'][roi[0]:roi[1],
+                                        roi[2]:roi[3]])
+                        mask_list.append(mask.astype(bool))
+                        if not np.all(mask == 1):
+                            print('Data at path={} has invalid region of interest'.format(path))
+                        assert np.sum(mask - (I>0)) == 0, 'err'
         self._region_of_interest = region_of_interest
+        self._mask_list = mask_list
 
     def set_valid_wavelength_index(self):
         """
@@ -230,7 +256,7 @@ class AirMSPIMeasurements(shdom.Measurements):
         if self._sensor_type == 'Radiance':
             self._valid_wavelength_index[[4, 5, 8, 9, 11, 12]] = False
 
-    def build_projection(self, f, region_of_interest):
+    def build_projection(self, f, region_of_interest, wavelength):
         """
             Read AirMSPI data and build adaquate projection according to SHDOM package.
 
@@ -249,53 +275,81 @@ class AirMSPIMeasurements(shdom.Measurements):
         latitude = latitude[region_of_interest[0]:region_of_interest[1], region_of_interest[2]:region_of_interest[3]]
         longitude = np.array(channels_data_ancillary['Longitude'])
         longitude = longitude[region_of_interest[0]:region_of_interest[1], region_of_interest[2]:region_of_interest[3]]
+        projections_height = np.full(longitude.shape, 0)
         if len(f) == 2:
-            elevation = np.full(longitude.shape, 0)
+            ground_height = np.full(longitude.shape, 0)
         elif len(f) == 3:
-            elevation = np.array(channels_data_ancillary['Elevation']) / 1000  # [Km]
-            elevation = elevation[region_of_interest[0]:region_of_interest[1],
+            ground_height = np.array(channels_data_ancillary['Elevation']) # [m]
+            ground_height = ground_height[region_of_interest[0]:region_of_interest[1],
                         region_of_interest[2]:region_of_interest[3]]
         else:
             assert 'Unsupported AirMSPI data version'
 
-        resolution = list(elevation.shape)
+        resolution = list(ground_height.shape)
 
         # -------------- Registration to 20 km altitude -------------
         # LLA(Latitude - Longitude - Altitude) to Flat surface(meters)
-        airmspi_flight_altitude = 20.0  # km
-        lla = [latitude, longitude, elevation]
+        airmspi_flight_altitude = 20  # km
+        lla = [latitude, longitude, projections_height]
         if self._relative_coordinates is None:
             llo = [latitude.min(), longitude.min()]  # Origin of lat - long coordinate system
             self._relative_coordinates = [llo[0], llo[1], 0]
         else:
             llo = self._relative_coordinates[:-1]
         psio = 0  # Angle between X axis and North
-        href = 0  # Reference height
-        flat_earth_pos = (np.array(self.lla2flat(lla, llo, psio, href)) / 1000)  # [Km] N-E coordinates
-
-        channels_data = f['HDFEOS']['GRIDS']['355nm_band']['Data Fields']
-        theta = np.deg2rad(channels_data['View_zenith']
-                           [region_of_interest[0]:region_of_interest[1], region_of_interest[2]:region_of_interest[3]])
-        mu = np.cos(theta)
-        phi = np.deg2rad(np.array(channels_data['View_azimuth'])
-                         [region_of_interest[0]:region_of_interest[1], region_of_interest[2]:region_of_interest[3]])
+        # href = ground_height.min()  # Reference height
+        href = 0
+        flat_earth_pos = np.array(self.lla2flat(lla, llo, psio, href)) / 1000 # [Km] N-E coordinates
+        # image reg with minimal ocean effect in this wl, View_zenith/azimuth equal for all wl
+        channels_data = f['HDFEOS']['GRIDS']['660nm_band']['Data Fields'] # 355 was before
+        zenith = channels_data['View_zenith'][region_of_interest[0]:region_of_interest[1], region_of_interest[2]:region_of_interest[3]]
+        azimuth = channels_data['View_azimuth'][region_of_interest[0]:region_of_interest[1], region_of_interest[2]:region_of_interest[3]]
         I = np.array(channels_data['I'][region_of_interest[0]:region_of_interest[1],
                      region_of_interest[2]:region_of_interest[3]])
-        cloud_com_x, cloud_com_y = self.center_of_mass(I,flat_earth_pos[0],flat_earth_pos[1])
+        I_mask = I>=0
+        zenith, azimuth = self.fix_corrupt_angles(I_mask,zenith,azimuth)
 
-        bb_x = flat_earth_pos[0] + self.cloud_base * np.tan(theta) * np.cos(phi) - cloud_com_x
-        bb_y = flat_earth_pos[1] + self.cloud_base * np.tan(theta) * np.cos(phi) - cloud_com_y
+        theta = np.deg2rad(zenith)
+        mu = np.cos(theta)
+        phi = np.deg2rad(azimuth)
+
+        I[I<0] = 0
+        cloud_base_pos = [flat_earth_pos[0] + self.cloud_base_h * np.tan(theta) * np.cos(phi),
+                          flat_earth_pos[1] + self.cloud_base_h * np.tan(theta) * np.sin(phi)]
+        cloud_com_x, cloud_com_y = self.center_of_mass(I,cloud_base_pos[0], cloud_base_pos[1])
+
+        bb_x = cloud_base_pos[0] - cloud_com_x
+        bb_y = cloud_base_pos[1] - cloud_com_y
         self.set_cloud_bounding_box(bb_x, bb_y)
 
-        xTranslation = airmspi_flight_altitude * np.tan(theta) * np.cos(phi) - cloud_com_x # X - North
-        yTranslation = airmspi_flight_altitude * np.tan(theta) * np.sin(phi) - cloud_com_y # Y - East
+        xTranslation = (airmspi_flight_altitude) * np.tan(theta) * np.cos(phi) - cloud_com_x # X - North
+        yTranslation = (airmspi_flight_altitude) * np.tan(theta) * np.sin(phi) - cloud_com_y # Y - East
 
-        x = flat_earth_pos[0] + xTranslation
-        y = flat_earth_pos[1] + yTranslation
+        x = (flat_earth_pos[0] + xTranslation)
+        y = (flat_earth_pos[1] + yTranslation)
         z = np.full(resolution, airmspi_flight_altitude)
 
         return shdom.Projection(x=x.ravel('F'), y=y.ravel('F'), z=z.ravel('F'), mu=mu.ravel('F'), phi=phi.ravel('F'),
                                 resolution=resolution)
+
+    def fix_corrupt_angles(self,I_mask, zenith, azimuth):
+        mask_zenith = zenith != -999
+        mask_azimuth = azimuth != -999
+        assert np.allclose(mask_zenith, mask_azimuth)
+        if np.allclose(I_mask, mask_azimuth):
+            return zenith, azimuth
+        return self.fill_angles(zenith), self.fill_angles(azimuth)
+
+    def fill_angles(self, angle):
+        angle = angle.T
+        x = np.arange(0, angle.shape[1])
+        angle[angle == -999] = np.nan
+        fits = []
+        for arr in angle:
+            mask = np.isfinite(arr)
+            fit = interpolate.interp1d(x[mask][-2:], arr[mask][-2:], axis=0, fill_value='extrapolate')
+            fits.append(fit(x))
+        return np.array(fits).T
 
     def set_cloud_bounding_box(self, x, y):
         """
@@ -309,9 +363,9 @@ class AirMSPIMeasurements(shdom.Measurements):
                 of cloud's base location in Km.
         """
         if self._bb is None:
-            self._bb = shdom.BoundingBox(x.min(), y.min(), self.cloud_base, x.max(), y.max(), self.cloud_top)
+            self._bb = shdom.BoundingBox(x.min(), y.min(), 0, x.max(), y.max(), self.cloud_max_h)
         else:
-            bb = shdom.BoundingBox(x.min(), y.min(), self.cloud_base, x.max(), y.max(), self.cloud_top)
+            bb = shdom.BoundingBox(x.min(), y.min(), 0, x.max(), y.max(), self.cloud_max_h)
             self._bb = self._bb + bb
 
     def center_of_mass(self, I, x, y):
@@ -325,8 +379,16 @@ class AirMSPIMeasurements(shdom.Measurements):
             com_y: scalar
                 of center of mass at y axis
         """
+        threshold_value = filters.threshold_isodata(I)
+        # threshold_value = 0.02*0
+        I[I < threshold_value] = 0
         com_x = np.sum(I * x) / np.sum(I)
         com_y = np.sum(I * y) / np.sum(I)
+        self._center_of_mass.append([x.shape[0]-int((com_x-x.min())/0.01), int((com_y-y.min())/0.01)])
+        # im = I
+        # im[point[0],point[1]] = 0.5
+        # plt.imshow(im)
+        # plt.show()
         return com_x, com_y
 
     def get_projections_from_data(self):
@@ -346,7 +408,7 @@ class AirMSPIMeasurements(shdom.Measurements):
         self._relative_coordinates = None
         for path, roi in zip(self._paths, self._region_of_interest):
             f = h5py.File(path, 'r')
-            projection = self.build_projection(f, roi)
+            projection = self.build_projection(f, roi, self._wavelength[0]) # not perfect for multispectral
             projections.add_projection(projection)
 
         centered_projections = shdom.MultiViewProjection()
@@ -439,6 +501,7 @@ class AirMSPIMeasurements(shdom.Measurements):
                 if "band" in param_name:
                     if int(param_name[0:3]) in self._valid_wavelength:
                         radiance = param['Data Fields']['I'][roi[0]:roi[1], roi[2]:roi[3]]
+                        radiance[radiance<0]=0
                         if first:
                             image = radiance
                             first = False
@@ -450,6 +513,174 @@ class AirMSPIMeasurements(shdom.Measurements):
             if image is not None:
                 images.append(np.array(image))
         self._images = images
+
+    def check_glint_angle(self):
+        glint_angles = []
+        for path, roi in zip(self._paths,self._region_of_interest):
+            f = h5py.File(path, 'r')
+            channels_data = f['HDFEOS']['GRIDS']
+            for param_name, param in channels_data.items():
+                if "band" in param_name:
+                    if int(param_name[0:3]) in self._valid_wavelength:
+                        glint_angle = param['Data Fields']['Glint_angle'][roi[0]:roi[1], roi[2]:roi[3]]
+                        glint_angle = glint_angle[glint_angle >= 0]
+                        glint_angles.append(np.mean(glint_angle))
+
+        self._glint_angles = glint_angles
+
+    def calc_albedo(self, threshold=None, medium_list=None, n_jobs=1):
+        dir_path = os.path.dirname(os.path.abspath(__file__))
+        wavelengths = self.wavelength
+        if not isinstance(wavelengths, list):
+            wavelengths = [wavelengths]
+        assert len(wavelengths) == 1, 'should be generelized to multispectral if works'
+        # Mie scattering for water droplets
+        mie_table_paths = [os.path.join(dir_path,
+            '../mie_tables/polydisperse/Water_{}nm.scat'.format(shdom.int_round(wavelength)))
+            for wavelength in wavelengths
+        ]
+        # solar_spectrum = shdom.SolarSpectrum('../ancillary_data/SpectralSolar_MODWehrli_1985_WMO.npz')
+        # solar_fluxes = solar_spectrum.get_monochrome_solar_flux(wavelengths)
+        # solar_flux = solar_fluxes
+        solar_flux = 1
+        if medium_list is None:
+            df = pd.read_csv(os.path.join(dir_path,'../ancillary_data/AFGL_summer_mid_lat.txt'), comment='#', sep=' ')
+            temperatures = df['Temperature(k)'].to_numpy(dtype=np.float32)
+            altitudes = df['Altitude(km)'].to_numpy(dtype=np.float32)
+            temperature_profile = shdom.GridData(shdom.Grid(z=altitudes), temperatures)
+            air_grid = shdom.Grid(z=np.linspace(0, 20, 20))
+            air = shdom.MultispectralScatterer()
+            for wavelength, table_path in zip(wavelengths, mie_table_paths):
+                # Molecular Rayleigh scattering
+                rayleigh = shdom.Rayleigh(wavelength)
+                rayleigh.set_profile(temperature_profile.resample(air_grid))
+                air.add_scatterer(rayleigh.get_scatterer())
+            grid = shdom.Grid(bounding_box=self.bb, nx=10, ny=10, nz=10)
+            atmospheric_grid = grid + air.grid
+            atmosphere = shdom.Medium(atmospheric_grid)
+            atmosphere.add_scatterer(air, name='air')
+            medium_list = [atmosphere]*len(self.images)
+
+
+        sensor = self.camera.sensor
+        albedo_opt_res_list = []
+        est_albedo_list =[]
+        for image, sun_azimuth, sun_zenith, projection,atmosphere in zip (self.images, self.sun_azimuth_list, self.sun_zenith_list,
+                                                               self._projections.projection_list,medium_list):
+            if threshold is None:
+                im_threshold = filters.threshold_isodata(image)
+            else:
+                im_threshold = threshold
+            albedo_opt_res = minimize_scalar(lambda albedo: self.calc_albedo_mse(albedo, wavelengths[0], sun_azimuth, sun_zenith,\
+                                                                      solar_flux, atmosphere, image, im_threshold, sensor,\
+                                                                       projection, n_jobs), bounds=(0, 0.1), method='bounded')
+            albedo_opt_res_list.append(albedo_opt_res)
+            est_albedo = albedo_opt_res.x
+            est_albedo_list.append(est_albedo)
+        self._albedo_opt_res_list = albedo_opt_res_list
+        self._est_albedo_list = est_albedo_list
+
+    @staticmethod
+    def calc_albedo_mse(albedo, wavelength, sun_azimuth, sun_zenith, solar_flux, atmosphere, image, im_threshold,
+                        sensor, projection, n_jobs=1):
+        numerical_params = shdom.NumericalParameters()
+        rte_solvers = shdom.RteSolverArray()
+        scene_params = shdom.SceneParameters(
+            surface=shdom.LambertianSurface(albedo=albedo),
+            wavelength=wavelength,
+            source=shdom.SolarSource(azimuth=sun_azimuth,
+                                     zenith=sun_zenith, flux=solar_flux)
+        )
+        rte_solver = shdom.RteSolver(scene_params, numerical_params)
+        rte_solver.set_medium(atmosphere)
+        rte_solvers.add_solver(rte_solver)
+        rte_solvers.solve(maxiter=10)
+        camera = shdom.Camera(sensor=sensor, projection=projection)
+        rendered_image = camera.render(rte_solvers, n_jobs=n_jobs)
+        ocn_diff = (rendered_image - image)[image<im_threshold]
+        mse = np.mean((ocn_diff.ravel()) ** 2)
+        # plt.imshow((rendered_image - image))
+        # plt.colorbar()
+        # plt.show()
+        return mse
+
+    def calc_wind(self, threshold=None, medium_list=None, n_jobs=1):
+        dir_path = os.path.dirname(os.path.abspath(__file__))
+        wavelengths = self.wavelength
+        if not isinstance(wavelengths, list):
+            wavelengths = [wavelengths]
+        assert len(wavelengths) == 1, 'should be generelized to multispectral if works'
+        # Mie scattering for water droplets
+        mie_table_paths = [os.path.join(dir_path,
+                                        '../mie_tables/polydisperse/Water_{}nm.scat'.format(
+                                            shdom.int_round(wavelength)))
+                           for wavelength in wavelengths
+                           ]
+        # solar_spectrum = shdom.SolarSpectrum('../ancillary_data/SpectralSolar_MODWehrli_1985_WMO.npz')
+        # solar_fluxes = solar_spectrum.get_monochrome_solar_flux(wavelengths)
+        # solar_flux = solar_fluxes
+        solar_flux = 1
+        if medium_list is None:
+            df = pd.read_csv(os.path.join(dir_path, '../ancillary_data/AFGL_summer_mid_lat.txt'), comment='#', sep=' ')
+            temperatures = df['Temperature(k)'].to_numpy(dtype=np.float32)
+            altitudes = df['Altitude(km)'].to_numpy(dtype=np.float32)
+            temperature_profile = shdom.GridData(shdom.Grid(z=altitudes), temperatures)
+            air_grid = shdom.Grid(z=np.linspace(0, 20, 20))
+            air = shdom.MultispectralScatterer()
+            for wavelength, table_path in zip(wavelengths, mie_table_paths):
+                # Molecular Rayleigh scattering
+                rayleigh = shdom.Rayleigh(wavelength)
+                rayleigh.set_profile(temperature_profile.resample(air_grid))
+                air.add_scatterer(rayleigh.get_scatterer())
+            grid = shdom.Grid(bounding_box=self.bb, nx=10, ny=10, nz=10)
+            atmospheric_grid = grid + air.grid
+            atmosphere = shdom.Medium(atmospheric_grid)
+            atmosphere.add_scatterer(air, name='air')
+            medium_list = [atmosphere] * len(self.images)
+
+        sensor = self.camera.sensor
+        wind_opt_res_list = []
+        est_wind_list = []
+        for image, sun_azimuth, sun_zenith, projection, atmosphere in zip(self.images, self.sun_azimuth_list,
+                                                                          self.sun_zenith_list,
+                                                                          self._projections.projection_list,
+                                                                          medium_list):
+            if threshold is None:
+                im_threshold = filters.threshold_otsu(image)
+            else:
+                im_threshold = threshold
+            wind_opt_res = minimize_scalar(
+                lambda wind: self.calc_wind_mse(wind, wavelengths[0], sun_azimuth, sun_zenith, \
+                                                    solar_flux, atmosphere, image, im_threshold, sensor, \
+                                                    projection, n_jobs), bounds=(5, 25), method='bounded')
+            wind_opt_res_list.append(wind_opt_res)
+            est_wind = wind_opt_res.x
+            est_wind_list.append(est_wind)
+        self._wind_opt_res_list = wind_opt_res_list
+        self._est_wind_list = est_wind_list
+
+    @staticmethod
+    def calc_wind_mse(wind, wavelength, sun_azimuth, sun_zenith, solar_flux, atmosphere, image, im_threshold,
+                        sensor, projection, n_jobs=1):
+        numerical_params = shdom.NumericalParameters()
+        rte_solvers = shdom.RteSolverArray()
+        scene_params = shdom.SceneParameters(
+            surface=shdom.OceanSurface(wind_speed=wind),
+            wavelength=wavelength,
+            source=shdom.SolarSource(azimuth=sun_azimuth,
+                                     zenith=sun_zenith, flux=solar_flux)
+        )
+        rte_solver = shdom.RteSolver(scene_params, numerical_params)
+        rte_solver.set_medium(atmosphere)
+        rte_solvers.add_solver(rte_solver)
+        rte_solvers.solve(maxiter=10)
+        camera = shdom.Camera(sensor=sensor, projection=projection)
+        rendered_image = camera.render(rte_solvers, n_jobs=n_jobs)
+        ocn_diff = (rendered_image - image)[image < im_threshold]
+        mse = np.mean((ocn_diff.ravel()) ** 2)
+        # plt.imshow(rendered_image)
+        # plt.show()
+        return mse
 
     def plot(self, ax, xlim, ylim, zlim, length=0.1):
         """
@@ -500,7 +731,8 @@ class AirMSPIMeasurements(shdom.Measurements):
                 z = np.vstack((z, np.full(4, position_z, dtype=np.float32)))
         ax.quiver(x, y, z, u, v, w, length=length, pivot='tail')
 
-    def lla2flat(self, lla, llo, psio, href):
+    @staticmethod
+    def lla2flat(lla, llo, psio, href):
         '''
         lla  -- array of geodetic coordinates
                 (latitude, longitude, and altitude),
@@ -554,7 +786,7 @@ class AirMSPIMeasurements(shdom.Measurements):
         Yp = (-dNorth * np.sin(psio)) + (dEast * np.cos(psio))
         Zp = -Alt_p - href
 
-        return Xp, -Yp, Zp
+        return Xp, Yp, Zp
 
     @property
     def sun_azimuth_list(self):
@@ -567,6 +799,14 @@ class AirMSPIMeasurements(shdom.Measurements):
     @property
     def bb(self):
         return self._bb
+
+    @property
+    def est_albedo_list(self):
+        return self._est_albedo_list
+
+    @property
+    def est_wind_list(self):
+        return self._est_wind_list
 
 
 class AirMSPIDynamicMeasurements(AirMSPIMeasurements, shdom.DynamicMeasurements):
@@ -589,9 +829,10 @@ class AirMSPIDynamicMeasurements(AirMSPIMeasurements, shdom.DynamicMeasurements)
           A list of approximated times in seconds of images acquisition, optional.
       """
 
-    def __init__(self, camera=None, images=None, pixels=None, wavelength=None, time_list=None):
+    def __init__(self, camera=None, images=None, pixels=None, wavelength=None, time_list=None, masks=None):
         super().__init__(camera, images, pixels, wavelength)
         self._time_list = time_list
+        self._mask_list = masks
 
     def load_from_hdf(self, data_dir, region_of_interest,
                       valid_wavelength=[355, 380, 445, 470, 555, 660, 865, 935], sensor_type='Radiance'):
@@ -632,7 +873,7 @@ class AirMSPIDynamicMeasurements(AirMSPIMeasurements, shdom.DynamicMeasurements)
         general_info = {}
         data_general_info = f['HDFEOS']['ADDITIONAL']['FILE_ATTRIBUTES'].attrs
         epoch_time = data_general_info['Epoch (UTC)'].decode('utf-8')
-        crop = epoch_time.find('.') - 1
+        crop = epoch_time.find('.')
         crop_begining = epoch_time.find('T') + 1
         general_info['epoch_time'] = datetime.strptime(epoch_time[:crop], '%Y-%m-%dT%H:%M:%S')
         general_info['epoch_date'] = datetime.strptime(epoch_time[0: crop_begining - 1], '%Y-%m-%d')
@@ -651,11 +892,13 @@ class AirMSPIDynamicMeasurements(AirMSPIMeasurements, shdom.DynamicMeasurements)
         """
         time_list = []
         first = True
-        for path, roi in zip(self._paths,self._region_of_interest):
+        for path, roi, point in zip(self._paths,self._region_of_interest,self._center_of_mass):
             f = h5py.File(path, 'r')
-            time_in_epoch = np.array(f['HDFEOS']['GRIDS']['355nm_band']['Data Fields']['Time_in_seconds_from_epoch'])
+            time_in_epoch = np.array(f['HDFEOS']['GRIDS']['660nm_band']['Data Fields']['Time_in_seconds_from_epoch'])
             time_in_epoch = time_in_epoch[roi[0]:roi[1], roi[2]:roi[3]]
-            relative_time = np.mean(time_in_epoch)  # sec
+            relative_time = time_in_epoch[point[0],point[1]]
+            assert relative_time != -999
+            # relative_time = np.mean(time_in_epoch)  # sec
             general_info = self.get_general_info(f)
             epoch_time = general_info['epoch_time']
             if first:
@@ -665,6 +908,7 @@ class AirMSPIDynamicMeasurements(AirMSPIMeasurements, shdom.DynamicMeasurements)
             assert self._acquisition_date == general_info['epoch_date']
             time_list.append((epoch_time - self._absolute_time).total_seconds() + relative_time)
         self._time_list = np.array(time_list)
+        self._num_viewed_mediums = self._time_list.size
 
     def set_camera(self):
         """
@@ -673,46 +917,46 @@ class AirMSPIDynamicMeasurements(AirMSPIMeasurements, shdom.DynamicMeasurements)
         projections = self.get_projections_from_data()
         self._projections = projections
         if self._sensor_type == 'Radiance':
-            sensor = shdom.RadianceSensor()
+            sensor = shdom.MaskedRadianceSensor()
         else:
             NotImplemented()
         self._camera = shdom.DynamicCamera(sensor, shdom.DynamicProjection(projections.projection_list))
 
-        def images_to_pixels(self, images):
-            """
-                Set image list.
-
-                Parameters
-                ----------
-                images: list of images,
-                    A list of images (multiview camera)
-
-                Returns
-                -------
-                pixels: a flattened version of the image list
-            """
-            pixels = []
-
-            if type(images) is not list:
-                images = [images]
-
-            for image in images:
-                if self.camera.sensor.type == 'RadianceSensor':
-                    if len(image.shape) == 2:
-                        num_channels = 1
-                    else:
-                        num_channels = image.shape[-1]
-                    pixels.append(image.reshape((-1, num_channels), order='F'))
-
-                elif self.camera.sensor.type == 'StokesSensor':
-                    NotImplemented()
-                    num_channels = image.shape[-1] if image.ndim == 4 else 1
-                    pixels.append(image.reshape((image.shape[0], -1, num_channels), order='F'))
-
-                else:
-                    raise AttributeError('Error image dimensions: {}'.format(image.ndim))
-            pixels = np.concatenate(pixels, axis=-2)
-            return pixels
+        # def images_to_pixels(self, images):
+        #     """
+        #         Set image list.
+        #
+        #         Parameters
+        #         ----------
+        #         images: list of images,
+        #             A list of images (multiview camera)
+        #
+        #         Returns
+        #         -------
+        #         pixels: a flattened version of the image list
+        #     """
+        #     pixels = []
+        #
+        #     if type(images) is not list:
+        #         images = [images]
+        #
+        #     for image in images:
+        #         if self.camera.sensor.type == 'RadianceSensor':
+        #             if len(image.shape) == 2:
+        #                 num_channels = 1
+        #             else:
+        #                 num_channels = image.shape[-1]
+        #             pixels.append(image.reshape((-1, num_channels), order='F'))
+        #
+        #         elif self.camera.sensor.type == 'StokesSensor':
+        #             NotImplemented()
+        #             num_channels = image.shape[-1] if image.ndim == 4 else 1
+        #             pixels.append(image.reshape((image.shape[0], -1, num_channels), order='F'))
+        #
+        #         else:
+        #             raise AttributeError('Error image dimensions: {}'.format(image.ndim))
+        #     pixels = np.concatenate(pixels, axis=-2)
+        #     return pixels
 
     @property
     def time_list(self):
