@@ -229,34 +229,34 @@ class Grid(object):
 
         mask_self = np.ones(self.z.shape, dtype=bool)
         mask_other = np.ones(other.z.shape, dtype=bool)
-        if z_bottom.any():
+        if z_bottom.size > 0:
             mask_self = self.z > z_bottom[-1]
             mask_other = other.z > z_bottom[-1]
             # z_middle_self = self.z[self.z > z_bottom[-1]]
             # z_middle_other = other.z[other.z > z_bottom[-1]]
-        if z_top.any():
+        if z_top.size > 0:
             mask_self = mask_self & (self.z < z_top[0])
             mask_other = mask_other & (other.z < z_top[0])
             # z_middle_self = self.z[self.z < z_top[0]]
             # z_middle_other = other.z[other.z < z_top[0]]
         z_middle_self = self.z[mask_self]
         z_middle_other = other.z[mask_other]
-    
+
         z_middle = z_middle_self if len(z_middle_self) > len(z_middle_other) else z_middle_other
-    
-        # Check if an extra point is necessary at the bottom 
+
+        # Check if an extra point is necessary at the bottom
         if z_bottom.any() & len(z_middle)>2:
             extra_zlevel = 2*z_middle[0] - z_middle[1]
             if extra_zlevel > z_bottom[-1]:
                 z_middle = np.append(extra_zlevel, z_middle)
-    
-        # Check if an extra point is necessary at the top 
+
+        # Check if an extra point is necessary at the top
         if z_top.any() & len(z_middle)>2:
             extra_zlevel = 2*z_middle[-1] - z_middle[-2]
             if extra_zlevel < z_top[0]:
                 z_middle = np.append(z_middle, extra_zlevel)
-    
-        return np.concatenate((z_bottom, z_middle, z_top))      
+
+        return np.concatenate((z_bottom, z_middle, z_top))
 
     def __add__(self, other):
         """Add two grids by finding the common grid which maintains the higher resolution grid."""
@@ -269,7 +269,7 @@ class Grid(object):
         x = self.get_common_x(other)
         y = self.get_common_y(other)
         z = self.get_common_z(other)
-        
+
         if x is not None and y is not None and z is not None:
             grid = Grid(x=x, y=y, z=z)
         else:
@@ -293,7 +293,7 @@ class Grid(object):
                 other_item = other.__dict__[key]
             if not np.array_equiv(np.nan_to_num(item), np.nan_to_num(other_item)):
                 return False
-        return True      
+        return True
 
     @property
     def type(self):
@@ -302,35 +302,35 @@ class Grid(object):
     @property
     def x(self):
         return self._x
-    
+
     @x.setter
     def x(self, val):
         val = np.array(val, dtype=np.float32)
-        spacing = np.around(np.diff(val),3)
-        assert np.all(np.isclose(spacing, spacing[0])), 'x grid supoprt equally spacing only'
+        spacing = np.diff(val)
+        assert np.all(np.isclose(spacing, spacing[0], atol=1e-6)), 'x grid supoprt equally spacing only'
         self._x = val
-        self._dx = spacing[0]  
+        self._dx = spacing[0]
         self._nx = len(val)
         self._xmin, self._xmax = val[0], val[-1]
-    
+
     @property
     def y(self):
         return self._y
-    
+
     @y.setter
     def y(self, val):
         val = np.array(val, dtype=np.float32)
-        spacing = np.around(np.diff(val),3)
-        assert np.all(np.isclose(spacing, spacing[0])), 'y grid supoprt equally spacing only'
+        spacing = np.diff(val)
+        assert np.all(np.isclose(spacing, spacing[0], atol=1e-6)), 'y grid supoprt equally spacing only'
         self._y = val
-        self._dy = spacing[0] 
+        self._dy = spacing[0]
         self._ny = len(val)
         self._ymin, self._ymax = val[0], val[-1]
 
     @property
     def z(self):
-        return self._z                 
-    
+        return self._z
+
     @z.setter
     def z(self, val):
         val = np.array(val, dtype=np.float32)
@@ -338,17 +338,17 @@ class Grid(object):
         self._nz = len(val)
         self._zmin, self._zmax = val[0], val[-1]
 
-    @property 
+    @property
     def nx(self):
         return self._nx
-    
-    @property 
+
+    @property
     def ny(self):
         return self._ny
 
-    @property 
+    @property
     def nz(self):
-        return self._nz    
+        return self._nz
 
     @property
     def shape(self):
@@ -358,88 +358,88 @@ class Grid(object):
             return (self.nz,)
         else:
             return (self.nx, self.ny, self.nz)
-    
+
     @property
     def num_points(self):
         return self.nx * self.ny * self.nz
-    
-    @property 
+
+    @property
     def dx(self):
         return self._dx
-    
-    @property 
+
+    @property
     def dy(self):
-        return self._dy    
-    
-    @property 
+        return self._dy
+
+    @property
     def xmin(self):
         return self._xmin
-    
-    @property 
+
+    @property
     def ymin(self):
         return self._ymin
 
-    @property 
+    @property
     def zmin(self):
         return self._zmin
-    
-    @property 
+
+    @property
     def xmax(self):
         return self._xmax
-    
-    @property 
-    def ymax(self):
-        return self._ymax    
 
-    @property 
+    @property
+    def ymax(self):
+        return self._ymax
+
+    @property
     def zmax(self):
-        return self._zmax    
+        return self._zmax
 
     @property
     def bounding_box(self):
         return self._bounding_box
-    
-    
+
+
 class GridData(object):
-    """ 
-    A container for scalar fields which are defined on a Grid. 
-    
+    """
+    A container for scalar fields which are defined on a Grid.
+
     Parameters
     ----------
     grid: shdom.Grid object
         A Grid object of type '1D' or '3D'.
     data: np.array
         data contains a scalar field.
-    """    
+    """
     def __init__(self, grid, data):
         self._type = grid.type
         self._grid = grid
         self._data = data
         self._shape = self._data.shape[:3]
-        self._ndim = self._data.ndim    
+        self._ndim = self._data.ndim
         if self.type == 'Homogeneous' and self.ndim != 0:
             raise AttributeError('Grid is Homogeneous but data dimension is:{}'.format(self.ndim))
         if self.type == '1D' and self.ndim != 1:
             raise AttributeError('Grid is 1D but data dimension is:{}'.format(self.ndim))
         if self.type == '3D' and self.ndim < 3:
             raise AttributeError('Grid is 3D but data dimension is:{}'.format(self.ndim))
-        
+
         assert self.shape == grid.shape, 'Data shape is {}, grid shape is {}'.format(self.shape, grid.shape)
 
         if self.type != 'Homogeneous':
-            self._linear_interpolator1d = interp1d(grid.z, self.data, assume_sorted=True, copy=False, bounds_error=False, fill_value=0.0) 
+            self._linear_interpolator1d = interp1d(grid.z, self.data, assume_sorted=True, copy=False, bounds_error=False, fill_value=0.0)
             self._nearest_interpolator1d = interp1d(grid.z, self.data, assume_sorted=True, kind='nearest', copy=False, bounds_error=False, fill_value=0)
         if self.type == '3D':
             self._linear_interpolator3d = RegularGridInterpolator((grid.x, grid.y, grid.z), self.data, bounds_error=False, fill_value=0.0)
             self._nearest_interpolator3d = RegularGridInterpolator((grid.x, grid.y, grid.z), self.data, method='nearest', bounds_error=False, fill_value=0)
-       
+
     def __eq__(self, other):
         """check if two GridData objects are equal"""
         if np.allclose(self.data, other.data) and self.grid == other.grid:
             return True
         else:
             return False
-        
+
     def __add__(self, other):
         """Add two GridData objects by resampling to a common grid."""
         if self.grid == other.grid:
@@ -459,7 +459,7 @@ class GridData(object):
             grid = self.grid + other.grid
             data = self.resample(grid).data - other.resample(grid).data
         return GridData(grid, data)
-    
+
     def __mul__(self, other):
         """Multiply two GridData objects by resampling to a common grid."""
         if self.grid == other.grid:
@@ -468,17 +468,17 @@ class GridData(object):
         else:
             grid = self.grid + other.grid
             data = self.resample(grid).data * other.resample(grid).data
-         
+
         return GridData(grid, data)
-    
+
     def squeeze_dims(self):
         """Squeezes grid dimensions for which the data is constant"""
         grid = self.grid
         data = self.data
         with warnings.catch_warnings():
-            warnings.simplefilter("ignore", category=RuntimeWarning)        
+            warnings.simplefilter("ignore", category=RuntimeWarning)
             if self.type == '3D':
-                std_x = np.nanstd(data, axis=0, ddof=-1) 
+                std_x = np.nanstd(data, axis=0, ddof=-1)
                 std_y = np.nanstd(data, axis=1, ddof=-1)
                 if np.nanmax(std_x) < 1e-5 and np.nanmax(std_y) < 1e-5:
                     std_z = np.nanstd(data, axis=2, ddof=-1)
@@ -490,27 +490,27 @@ class GridData(object):
                         grid = shdom.Grid(bounding_box=grid.bounding_box, z=grid.z)
             elif self.type == '1D':
                 std = np.nanstd(data, ddof=-1)
-                if np.nanmax(std) < 1e-5: 
+                if np.nanmax(std) < 1e-5:
                     data = np.nanmean(data)
-                    grid = shdom.Grid(bounding_box=grid.bounding_box)   
+                    grid = shdom.Grid(bounding_box=grid.bounding_box)
         return GridData(grid, np.nan_to_num(data))
 
     def resample(self, grid, method='linear'):
         """
         Resample data to a new Grid
-        
+
         Parameters
         ----------
         grid: shdom.Grid
             The grid to which the data will be resampled
         method: str, default='linear'
             Options are: 'linear', 'nearest'
-        
+
         Returns
         -------
         grid_data: shdom.GridData
             GridData sampled onto the new grid.
-            
+
         Notes
         -----
         1. A 1D/3D grid sampled onto a Homogeneous grid yields the mean of the data.
@@ -518,12 +518,12 @@ class GridData(object):
         3. A 3D grid sampled onto 1D grid reamples along the vertical axis and averages along the horizontal axes
         """
         if self.grid == grid:
-            return self   
-        
+            return self
+
         else:
             if self.type =='Homogeneous':
                 data = np.full(shape=grid.shape, fill_value=self.data)
-            
+
             elif self.type == '1D':
                 if grid.type == 'Homogeneous':
                     data = np.mean(self.data)
@@ -534,7 +534,7 @@ class GridData(object):
                         data = self._nearest_interpolator1d(grid.z)
                     if grid.type == '3D':
                         data = np.tile(data[np.newaxis, np.newaxis, :], (grid.nx, grid.ny, 1))
-                    
+
             elif self.type == '3D':
                 if grid.type == 'Homogeneous':
                     data = np.mean(self.data)
@@ -551,7 +551,7 @@ class GridData(object):
                     if method == 'linear':
                         data = self._linear_interpolator3d(np.stack(np.meshgrid(grid.x, grid.y, grid.z, indexing='ij'), axis=-1))
                     elif method == 'nearest':
-                        data = self._nearest_interpolator3d(np.stack(np.meshgrid(grid.x, grid.y, grid.z, indexing='ij'), axis=-1)) 
+                        data = self._nearest_interpolator3d(np.stack(np.meshgrid(grid.x, grid.y, grid.z, indexing='ij'), axis=-1))
         return GridData(grid, data.astype(self.data.dtype))
 
     def apply_mask(self, mask):
@@ -570,36 +570,36 @@ class GridData(object):
     @property
     def grid(self):
         return self._grid
-    
+
     @property
     def data(self):
         return self._data
-    
+
     @property
     def shape(self):
         return self._shape
-    
+
     @property
     def ndim(self):
-        return self._ndim      
-    
+        return self._ndim
+
     @property
     def max_value(self):
         return self.data.max()
-    
+
     @property
     def min_value(self):
-        return self.data.min()    
-    
+        return self.data.min()
+
     @property
     def type(self):
-        return self._type    
+        return self._type
 
 
 class BoundingBox(object):
-    """ 
+    """
     A bounding box object.
-    
+
     Parameters
     ----------
     xmin: float
@@ -614,21 +614,21 @@ class BoundingBox(object):
          Maximum y (East) [km].
     zmax: float
          Maximum z (Up) [km].
-    """ 
+    """
     def __init__(self, xmin, ymin, zmin, xmax, ymax, zmax):
-        assert xmin < xmax, 'Zero area bounding_box along x axis.'  
-        assert ymin < ymax, 'Zero area bounding_box along y axis.' 
-        assert zmin < zmax, 'Zero area bounding_box along z axis.'       
+        assert xmin < xmax, 'Zero area bounding_box along x axis.'
+        assert ymin < ymax, 'Zero area bounding_box along y axis.'
+        assert zmin < zmax, 'Zero area bounding_box along z axis.'
         self.xmin = xmin
         self.ymin = ymin
         self.zmin = zmin
         self.xmax = xmax
         self.ymax = ymax
         self.zmax = zmax
-        
-    def __eq__(self, other) : 
+
+    def __eq__(self, other) :
         return self.__dict__ == other.__dict__
-    
+
     def __add__(self, other):
         xmin = min(self.xmin, other.xmin)
         ymin = min(self.ymin, other.ymin)
@@ -646,7 +646,7 @@ from shdom.rte_solver import *
 from shdom.optimize import *
 from shdom.dynamic_scene import *
 from shdom.AirMSPI import *
-# import shdom.generate as Generate
+import shdom.generate as Generate
 
 
 def save_forward_model(directory, medium, solver, measurements):
