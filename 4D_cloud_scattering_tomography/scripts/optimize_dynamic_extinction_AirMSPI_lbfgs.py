@@ -1,9 +1,9 @@
-import os, time
+﻿import os, time
 import numpy as np
 import argparse
 import shdom
 import scipy.ndimage as sci
-
+import scipy.stats as sci_stat
 
 class OptimizationScript(object):
     """
@@ -94,9 +94,17 @@ class OptimizationScript(object):
                             type=float,
                             help='(default value: %(default)s) Loss function weights for stokes vector components [I, Q, U, V]')
         parser.add_argument('--loss_type',
-                            choices=['l2', 'normcorr'],
+                            choices=['l2', 'l2_weighted', 'normcorr'],
                             default='l2',
                             help='Different loss functions for optimization. Currently only l2 is supported.')
+        parser.add_argument('--num_mu_bins',
+                            default=8,
+                            type=np.int,
+                            )
+        parser.add_argument('--num_phi_bins',
+                            default=16,
+                            type=np.int,
+                            )
         parser.add_argument('--assume_moving_cloud',
                             default=False,
                             action='store_true',
@@ -111,6 +119,9 @@ class OptimizationScript(object):
                             type=int,
                             help='Number of different mediums to be reconstructed,'
                                  ' if negative run without cross validation')
+        parser.add_argument('--sigma',
+                            default=20,
+                            type=float)
 
         return parser
 
@@ -135,15 +146,22 @@ class OptimizationScript(object):
                             action='store_true',
                             help='Use the ground-truth phase reconstruction.')
         parser.add_argument('--radiance_threshold',
-                            default=[0.005],
+                            default=[-0.03],
                             nargs='+',
                             type=np.float32,
                             help='(default value: %(default)s) Threshold for the radiance to create a cloud mask.' \
                             'Threshold is either a scalar or a list of length of measurements.')
+        parser.add_argument('--space_carve_agreement',
+                            default=0.9,
+                            type=np.float32)
         parser.add_argument('--mie_base_path',
                             default='mie_tables/polydisperse/Water_<wavelength>nm.scat',
                             help='(default value: %(default)s) Mie table base file name. ' \
                                  '<wavelength> will be replaced by the corresponding wavelength.')
+        parser.add_argument('--surface_type',
+                            default='Lambertian',
+                            type=str,
+                            help='')
 
         return parser
 
@@ -202,10 +220,20 @@ class OptimizationScript(object):
         num_of_mediums = self.args.num_mediums
         cv_index = self.args.use_cross_validation
         time_list = measurements.time_list
+        images_weight = None
         if cv_index >= 0:
+            cv_time = time_list[cv_index]
             time_list = np.delete(time_list, cv_index)
+            if self.args.loss_type == 'l2_weighted':
+                delta_time = np.abs(np.array(time_list) - cv_time)
+                images_weight = 1 / delta_time
+                images_weight /= np.sum(images_weight)
+                images_weight += 1
+                images_weight /= np.sum(images_weight)
+                images_weight *= images_weight.shape
 
         assert isinstance(num_of_mediums, int) and num_of_mediums <= len(time_list)
+        time_list = np.mean(np.split(time_list, num_of_mediums), 1)
 
         wavelength = measurements.wavelength
         if not isinstance(wavelength,list):
@@ -213,7 +241,8 @@ class OptimizationScript(object):
 
         # Define the grid for reconstruction
         grid = albedo_grid = phase_grid = shdom.Grid(bounding_box=measurements.bb,nx=self.args.nx,ny=self.args.ny,nz=self.args.nz)
-
+        mask_grid = shdom.Grid(bounding_box=measurements.bb,nx=np.round(self.args.nx/2).astype(np.int),ny=np.round(self.args.ny/2).astype(np.int)
+                               ,nz=np.round(self.args.nz/2).astype(np.int))
         if self.args.assume_moving_cloud:
             cloud_velocity = None
         else:
@@ -222,10 +251,11 @@ class OptimizationScript(object):
 
         # Find a cloud mask for non-cloudy grid points
         dynamic_carver = shdom.DynamicSpaceCarver(measurements)
-        mask_list, dynamic_grid, cloud_velocity = dynamic_carver.carve(grid, agreement=0.70,
+        mask_list, dynamic_grid, cloud_velocity = dynamic_carver.carve(mask_grid, agreement=self.args.space_carve_agreement,
                             time_list = measurements.time_list, thresholds=self.args.radiance_threshold,
-                            vx_max = 10, vy_max=10, gt_velocity = cloud_velocity)
+                            vx_max = 0, vy_max=0, gt_velocity = cloud_velocity,verbose=False)
         mask = mask_list[0]
+        mask.resample(grid)
         show_mask=1
         if show_mask:
             a = mask.data.astype(int)
@@ -237,17 +267,9 @@ class OptimizationScript(object):
         albedo = self.cloud_generator.get_albedo(wavelength[0], [albedo_grid] * num_of_mediums)
         phase = self.cloud_generator.get_phase(wavelength[0], [phase_grid] * num_of_mediums)
 
-        # cv_index = self.args.use_cross_validation
-        # if cv_index >= 0:
-        #     # del dynamic_grid[cv_index]
-        #     # del mask_list[cv_index]
-        #     # del albedo[cv_index]
-        #     # del phase[cv_index]
-        #     time_list = np.delete(measurements.time_list, cv_index)
-        time_list = np.mean(np.split(time_list, num_of_mediums), 1)
 
-
-        extinction = shdom.DynamicGridDataEstimator(self.cloud_generator.get_extinction(wavelength, [grid] * num_of_mediums),
+        # grid.xmin
+        extinction = shdom.DynamicGridDataEstimator(self.cloud_generator.get_extinction(wavelength[0], [grid] * num_of_mediums),
                                                     min_bound=1e-5,
                                                     max_bound=2e2)
         kw_optical_scatterer = {"extinction": extinction, "albedo": albedo, "phase": phase}
@@ -255,9 +277,9 @@ class OptimizationScript(object):
         cloud_estimator.set_mask([mask] * num_of_mediums)
 
         # Create a medium estimator object (optional Rayleigh scattering)
-        air = self.air_generator.get_scatterer(wavelength)
-        medium_estimator = shdom.DynamicMediumEstimator(cloud_estimator, air, cloud_velocity)
 
+        air = self.air_generator.get_scatterer(wavelength)
+        medium_estimator = shdom.DynamicMediumEstimator(cloud_estimator, air, cloud_velocity,images_weight=images_weight, loss_type=self.args.loss_type,sigma=self.args.sigma)
         return medium_estimator
 
     def get_summary_writer(self, measurements):
@@ -284,7 +306,8 @@ class OptimizationScript(object):
             writer.monitor_loss()
             writer.monitor_shdom_iterations()
             writer.monitor_images(measurements=measurements, ckpt_period=-1)
-
+            writer.monitor_save3d(ckpt_period=-1)
+            writer.monitor_images_scatter_plot(measurements=measurements)
             # save parse_arguments
             self.save_args(log_dir)
         return writer
@@ -320,11 +343,9 @@ class OptimizationScript(object):
         medium_estimator = self.get_medium_estimator(measurements)
 
         # Initialize a RTESolver
-        dynamic_solver = self.get_rte_solver(measurements, medium_estimator)
+        dynamic_solver, cv_rte_solver = self.get_rte_solver(measurements, medium_estimator)
 
         if cv_index >= 0:
-            cv_rte_solver = shdom.DynamicRteSolver(scene_params=dynamic_solver._scene_params,
-                                                   numerical_params=dynamic_solver._numerical_params)
             cv_measurement, measurements = measurements.get_cross_validation_measurements(cv_index)
         measurements = measurements.downsample_viewed_mediums(self.args.num_mediums)
 
@@ -355,25 +376,88 @@ class OptimizationScript(object):
         return optimizer
 
     def get_rte_solver(self,measurements, medium_estimator):
-        scene_params_list = []
-        numerical_params_list = []
         wavelengths = measurements.wavelength
         if not isinstance(wavelengths,list):
             wavelengths = [wavelengths]
-        for wavelength, sun_azimuth, sun_zenith in zip(wavelengths, measurements.sun_azimuth_list,
-                                                       measurements.sun_zenith_list):
-            scene_params = shdom.SceneParameters(
-                wavelength=wavelength,
-                surface=shdom.LambertianSurface(albedo=0.005),
-                source=shdom.SolarSource(azimuth=sun_azimuth, zenith=sun_zenith)
-            )
-            scene_params_list.append(scene_params)
-            numerical_params = shdom.NumericalParameters(num_mu_bins=8, num_phi_bins=16, split_accuracy=0.1)
-            numerical_params_list.append(numerical_params)
+        sun_azimuth_list = measurements.sun_azimuth_list
+        sun_zenith_list = measurements.sun_zenith_list
+        if self.args.surface_type == 'Lambertian':
+            # measurements.calc_albedo(n_jobs=self.args.n_jobs)
+            surface_params = measurements.est_albedo_list
+            surface_params = [0.04]*len(sun_zenith_list)
+        elif self.args.surface_type == 'Ocean':
+            # measurements.calc_wind(n_jobs=self.args.n_jobs)
+            surface_params = measurements.est_wind_list
+            surface_params = [20] * len(sun_zenith_list)
+        else:
+            assert False, 'unknown surface type'
 
-        dynamic_solver = shdom.DynamicRteSolver(scene_params=scene_params_list, numerical_params=numerical_params_list)
+        cv_index = self.args.use_cross_validation
+        num_of_mediums = self.args.num_mediums
+
+        cv_dynamic_solver = None
+        if cv_index >= 0:
+            cv_sun_azimuth = sun_azimuth_list[cv_index]
+            cv_sun_zenith = sun_zenith_list[cv_index]
+            cv_param = surface_params[cv_index]
+            sun_azimuth_list = np.delete(sun_azimuth_list, cv_index)
+            sun_zenith_list = np.delete(sun_zenith_list, cv_index)
+            surface_params = np.delete(surface_params, cv_index)
+        sun_azimuth_list = sci_stat.circmean(np.split(np.array(sun_azimuth_list), num_of_mediums), axis=1,high=360)
+        sun_zenith_list = sci_stat.circmean(np.split(np.array(sun_zenith_list), num_of_mediums), axis=1,high=360)
+        surface_params = np.mean(np.split(np.array(surface_params), num_of_mediums), 1)
+
+        wl_scene_params_list =[]
+        wl_numerical_params_list =[]
+        for sun_azimuth, sun_zenith, surface_param in zip(sun_azimuth_list, sun_zenith_list, surface_params):
+            if self.args.surface_type == 'Lambertian':
+                surface = shdom.LambertianSurface(albedo=surface_param)
+            elif self.args.surface_type == 'Ocean':
+                surface = shdom.OceanSurface(wind_speed=surface_param)
+            else:
+                assert False, 'unknown surface type'
+            scene_params_list = []
+            numerical_params_list = []
+            for wavelength in wavelengths:
+                scene_params = shdom.SceneParameters(
+                    wavelength=wavelength,
+                    surface=surface,
+                    source=shdom.SolarSource(azimuth=sun_azimuth, zenith=sun_zenith)
+                )
+                scene_params_list.append(scene_params)
+                numerical_params = shdom.NumericalParameters(num_mu_bins=self.args.num_mu_bins, num_phi_bins=self.args.num_phi_bins)
+                numerical_params_list.append(numerical_params)
+            wl_scene_params_list.append(scene_params_list)
+            wl_numerical_params_list.append(numerical_params_list)
+        dynamic_solver = shdom.DynamicRteSolver(scene_params=wl_scene_params_list, numerical_params=wl_numerical_params_list)
         dynamic_solver.set_dynamic_medium(medium_estimator)
-        return dynamic_solver
+        if cv_index >= 0:
+            wl_scene_params_list = []
+            wl_numerical_params_list = []
+            scene_params_list = []
+            numerical_params_list = []
+            if self.args.surface_type == 'Lambertian':
+                surface = shdom.LambertianSurface(albedo=cv_param)
+            elif self.args.surface_type == 'Ocean':
+                surface = shdom.OceanSurface(wind_speed=cv_param)
+            else:
+                assert False, 'unknown surface type'
+            for wavelength in wavelengths:
+                scene_params = shdom.SceneParameters(
+                    wavelength=wavelength,
+                    surface=surface,
+                    source=shdom.SolarSource(azimuth=cv_sun_azimuth, zenith=cv_sun_zenith)
+                )
+                scene_params_list.append(scene_params)
+                numerical_params = shdom.NumericalParameters(num_mu_bins=self.args.num_mu_bins, num_phi_bins=self.args.num_phi_bins)
+                numerical_params_list.append(numerical_params)
+            wl_scene_params_list.append(scene_params_list)
+            wl_numerical_params_list.append(numerical_params_list)
+            cv_dynamic_solver = shdom.DynamicRteSolver(scene_params=wl_scene_params_list,
+                                                    numerical_params=wl_numerical_params_list)
+
+        return dynamic_solver, cv_dynamic_solver
+
 
     def main(self):
         """

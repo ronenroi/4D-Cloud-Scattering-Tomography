@@ -2,9 +2,7 @@ import os, time
 import numpy as np
 import shdom
 from Develop_Dynamic_cloud.scripts.optimize_dynamic_extinction_lbfgs import OptimizationScript as ExtinctionOptimizationScript
-import sys
-from os.path import dirname
-sys.path.append(dirname(__file__))
+
 
 class OptimizationScript(ExtinctionOptimizationScript):
     """
@@ -56,9 +54,6 @@ class OptimizationScript(ExtinctionOptimizationScript):
         parser.add_argument('--const_lwc',
                             action='store_true',
                             help='Keep liquid water content constant at a specified value (not optimized).')
-        parser.add_argument('--one_dim_reff',
-                            action='store_true',
-                            help='Keep liquid water content constant at a specified value (not optimized).')
         parser.add_argument('--const_reff',
                             action='store_true',
                             help='Keep effective radius constant at a specified value (not optimized).')
@@ -66,28 +61,23 @@ class OptimizationScript(ExtinctionOptimizationScript):
                             action='store_true',
                             help='Keep effective variance constant at a specified value (not optimized).')
         parser.add_argument('--radiance_threshold',
-                            default=[0.03],
+                            default=[0.0175],
                             nargs='+',
                             type=np.float32,
                             help='(default value: %(default)s) Threshold for the radiance to create a cloud mask.'
                             'Threshold is either a scalar or a list of length of measurements.')
         parser.add_argument('--lwc_scaling',
-                            default=10,
+                            default=10.0,
                             type=np.float32,
                             help='(default value: %(default)s) Pre-conditioning scale factor for liquid water content estimation')
         parser.add_argument('--reff_scaling',
-                            default=0.1,
+                            default=1e-1,
                             type=np.float32,
                             help='(default value: %(default)s) Pre-conditioning scale factor for effective radius estimation')
         parser.add_argument('--veff_scaling',
                             default=1.0,
                             type=np.float32,
                             help='(default value: %(default)s) Pre-conditioning scale factor for effective variance estimation')
-        parser.add_argument('--sigma',
-                            # default=[20, np.inf])
-                            default=20,
-                            type=np.float32)
-
         return parser
 
     def get_medium_estimator(self, measurements: shdom.DynamicMeasurements, ground_truth: shdom.DynamicScatterer):
@@ -106,63 +96,20 @@ class OptimizationScript(ExtinctionOptimizationScript):
         medium_estimator: shdom.MediumEstimator
             A medium estimator object which defines the optimized parameters.
         """
-
-        num_of_mediums = self.args.num_mediums
-        cv_index = self.args.use_cross_validation
-        time_list = measurements.time_list
-        temporary_scatterer_list = ground_truth._temporary_scatterer_list
-
-        if cv_index >= 0:
-            cv_time = time_list[cv_index]
-            time_list = np.delete(time_list, cv_index)
-            temporary_scatterer_list = np.delete(temporary_scatterer_list, cv_index)
-            if self.args.loss_type == 'l2_weighted':
-                delta_time = np.abs(np.array(time_list) - cv_time)
-                images_weight = 1 / delta_time
-                images_weight /= np.sum(images_weight)
-                images_weight += 1
-                images_weight /= np.sum(images_weight)
-                images_weight *= images_weight.shape
-
-        assert isinstance(num_of_mediums, int) and num_of_mediums <= len(time_list)
-        time_list = np.mean(np.split(np.array(time_list), num_of_mediums), 1)
-
-        wavelength = ground_truth.wavelength
-        if not isinstance(wavelength, list):
-            wavelength = [wavelength]
         # Define the grid for reconstruction
         if self.args.use_forward_grid:
-            lwc_grid = []
-            reff_grid = []
-            veff_grid = []
-            l_grid = []
-            r_grid = []
-            v_grid = []
-            for temporary_scatterer in temporary_scatterer_list:
-                l_grid.append(temporary_scatterer.scatterer.lwc.grid)
-                r_grid.append(temporary_scatterer.scatterer.reff.grid)
-                v_grid.append(temporary_scatterer.scatterer.veff.grid)
-
-            l_grid = np.split(np.array(l_grid), num_of_mediums)
-            r_grid = np.split(np.array(r_grid), num_of_mediums)
-            v_grid = np.split(np.array(v_grid), num_of_mediums)
-            for l, r, v in zip(l_grid, r_grid, v_grid):
-                lwc_grid.append(np.sum(l))
-                reff_grid.append(np.sum(r))
-                veff_grid.append(np.sum(v))
-            grid = lwc_grid[0]
-
+            _, lwc_grid = ground_truth.get_lwc()
+            _, reff_grid = ground_truth.get_reff()
+            _, veff_grid = ground_truth.get_veff()
         else:
-            grid = self.cloud_generator.get_grid()
-            grid = shdom.Grid(x=grid.x + temporary_scatterer_list[0].scatterer.lwc.grid.xmin, y=grid.y + temporary_scatterer_list[0].scatterer.lwc.grid.ymin, z=grid.z)
-            lwc_grid = reff_grid = veff_grid = [grid]*num_of_mediums
-        if self.args.one_dim_reff:
-            for i, grid in enumerate(reff_grid):
-                reff_grid[i] = shdom.Grid(z=grid.z)
+            lwc_grid = reff_grid = veff_grid = [self.cloud_generator.get_grid()]
+        grid = lwc_grid[0] + reff_grid[0] + veff_grid[0]
+        grid = shdom.Grid(x=grid.x - grid.xmin, y=grid.y - grid.ymin, z=grid.z)
 
+        # Set cloud's velocity
         if self.args.use_forward_cloud_velocity:
             if ground_truth.num_scatterers > 1:
-                cloud_velocity = ground_truth.get_velocity()[0]
+                cloud_velocity = ground_truth.get_velocity()
             else:
                 cloud_velocity = [0,0,0]
             cloud_velocity = np.array(cloud_velocity)*1000 #km/sec to m/sec
@@ -170,7 +117,7 @@ class OptimizationScript(ExtinctionOptimizationScript):
             cloud_velocity = None
 
         # Find a cloud mask for non-cloudy grid points
-        self.thr = 1e-3
+        self.thr = 1e-6
 
         if self.args.use_forward_mask:
             mask_list = ground_truth.get_mask(threshold=self.thr)
@@ -182,12 +129,11 @@ class OptimizationScript(ExtinctionOptimizationScript):
 
         else:
             dynamic_carver = shdom.DynamicSpaceCarver(measurements)
-            mask_list, dynamic_grid, cloud_velocity = dynamic_carver.carve(grid, agreement=0.9,
+            mask_list, dynamic_grid, cloud_velocity = dynamic_carver.carve(grid, agreement=0.75,
                                                                            time_list=measurements.time_list,
                                                                            thresholds=self.args.radiance_threshold,
-                                                                           vx_max=0, vy_max=0,
-                                                                           gt_velocity=cloud_velocity,
-                                                                           verbose = False)
+                                                                           vx_max=5, vy_max=0,
+                                                                           gt_velocity=cloud_velocity)
             show_mask = 1
             if show_mask:
                 a = (mask_list[0].data).astype(int)
@@ -199,57 +145,34 @@ class OptimizationScript(ExtinctionOptimizationScript):
 
         # Define micro-physical parameters: either optimize, keep constant at a specified value or use ground-truth
         if self.args.use_forward_lwc:
-            lwc = ground_truth.get_lwc()[:num_of_mediums]#TODO use average
+            lwc,_ = ground_truth.get_lwc()
             for ind in range(len(lwc)):
                 lwc[ind] = lwc[ind].resample(lwc_grid[ind])
         elif self.args.const_lwc:
             lwc = self.cloud_generator.get_lwc(lwc_grid)
-
         else:
-            rr = []
-            for m, r in zip(mask_list, lwc_grid):
-                rr.append(self.get_monotonous_lwc(m.resample(r), 0.3))
-            lwc = shdom.DynamicGridDataEstimator(rr,
+            lwc = shdom.DynamicGridDataEstimator(self.cloud_generator.get_lwc(lwc_grid),
                                           min_bound=1e-5,
                                           max_bound=2.0,
                                           precondition_scale_factor=self.args.lwc_scaling)
-            # lwc = shdom.DynamicGridDataEstimator(self.cloud_generator.get_lwc(lwc_grid),
-            #                               min_bound=1e-5,
-            #                               max_bound=2.0,
-            #                               precondition_scale_factor=self.args.lwc_scaling)
             lwc = lwc.dynamic_data
 
-
         if self.args.use_forward_reff:
-            reff = ground_truth.get_reff()[:num_of_mediums] #TODO use average
+            reff,_ = ground_truth.get_reff()
             for ind in range(len(reff)):
                 reff[ind] = reff[ind].resample(reff_grid[ind])
-
         elif self.args.const_reff:
-            # reff = self.cloud_generator.get_reff(reff_grid)
-            reff = []
-            for m, r in zip(mask_list, reff_grid):
-                # reff.append(self.get_monotonous_reff(m.resample(r), 6.67, 3)) #cloud1
-                reff.append(self.get_monotonous_reff(m.resample(r), 7.71, 4, z0=reff_grid[0].z[18])) #cloud2
-
+            reff = self.cloud_generator.get_reff(reff_grid)
         else:
-            rr=[]
-            for m,r in zip(mask_list,reff_grid):
-                # rr.append (self.get_monotonous_reff(m.resample(r), 6.67, 3))#cloud1
-                rr.append (self.get_monotonous_reff(m.resample(r), 7.71, 4, z0=reff_grid[0].z[18]))#cloud2
-
-            reff = shdom.DynamicGridDataEstimator(rr,
+            reff = shdom.DynamicGridDataEstimator(self.cloud_generator.get_reff(reff_grid),
                                            min_bound=0.01,
                                            max_bound=35,
                                            precondition_scale_factor=self.args.reff_scaling)
-            # reff = shdom.DynamicGridDataEstimator(self.cloud_generator.get_reff(reff_grid),
-            #                                min_bound=0.01,
-            #                                max_bound=35,
-            #                                precondition_scale_factor=self.args.reff_scaling)
             reff = reff.dynamic_data
 
+
         if self.args.use_forward_veff:
-            veff = ground_truth.get_veff()[:num_of_mediums] #TODO use average
+            veff,_ = ground_truth.get_veff()
             for ind in range(len(veff)):
                 veff[ind] = veff[ind].resample(veff_grid[ind])
         elif self.args.const_veff:
@@ -261,69 +184,25 @@ class OptimizationScript(ExtinctionOptimizationScript):
                                            precondition_scale_factor=self.args.veff_scaling)
             veff = veff.dynamic_data
 
-        if cv_index >= 0:
-            del lwc_grid[cv_index]
-            del mask_list[cv_index]
-            del reff[cv_index]
-            del veff[cv_index]
-
         for lwc_i, reff_i, veff_i, mask in zip(lwc, reff, veff, mask_list):
             lwc_i.apply_mask(mask)
             reff_i.apply_mask(mask)
             veff_i.apply_mask(mask)
 
-        # for l in lwc:
-        #     l._data=(self.get_monotonous_lwc(mask_list[0], 0.3)).data
-        # for r in reff:
-        #     r._data = (self.get_monotonous_reff(r,6.67,3))._data
-        #     a=r.data
-        # r = r.resample(l.grid)
-        # import matplotlib.pyplot as plt
-        # shdom.cloud_plot(lwc_i.data)
-        # plt.plot(reff_i.data)
-        # plt.show()
         # Define a MicrophysicalScattererEstimator object
         kw_microphysical_scatterer = {"lwc": lwc, "reff": reff, "veff": veff}
-        cloud_estimator = shdom.DynamicScattererEstimator(wavelength=wavelength, time_list=time_list, **kw_microphysical_scatterer)
+        cloud_estimator = shdom.DynamicScattererEstimator(wavelength=measurements.wavelength, time_list=measurements.time_list, **kw_microphysical_scatterer)
         cloud_estimator.set_mask(mask_list)
 
         # Create a medium estimator object (optional Rayleigh scattering)
 
         air = self.air_generator.get_scatterer(cloud_estimator.wavelength)
-        # sigma = {"lwc": self.args.sigma[0], 'reff': self.args.sigma[1]}
-        sigma = {"lwc": self.args.sigma, 'reff': np.inf}
-        medium_estimator = shdom.DynamicMediumEstimator(cloud_estimator, air, cloud_velocity,sigma=sigma, loss_type=self.args.loss_type,
-                                                        stokes_weights=self.args.stokes_weights, regularization_const=self.args.reg_const)
+        medium_estimator = shdom.DynamicMediumEstimator(cloud_estimator, air, cloud_velocity,
+                                                        loss_type=self.args.loss_type,
+                                                        stokes_weights=self.args.stokes_weights
+                                                        )
         return medium_estimator
 
-    def get_monotonous_reff(self, old_reff, slope, reff0, z0=None):
-        mask = old_reff.data > 0
-        grid = old_reff.grid
-        if z0 is None:
-            z0 = grid.z[mask][0]
-
-        Z = grid.z - z0
-        Z[Z < 0] = 0
-        reff_data = (slope * Z ** (1. / 3.)) + reff0
-
-        reff_data[Z == 0] = 0
-        reff_data[mask == 0] = 0
-        return shdom.GridData(grid, reff_data)
-
-    def get_monotonous_lwc(self, old_lwc, slope, z0=None):
-        mask = old_lwc.data > 0
-        mask_z = np.sum(mask,(0,1))>0
-        grid = old_lwc.grid
-        if z0 is None:
-            z0 = grid.z[mask_z][0]
-
-        Z = grid.z - z0
-        Z[Z < 0] = 0
-        lwc_profile = (slope * Z ) + 0.01
-        lwc_data = np.tile(lwc_profile[np.newaxis, np.newaxis, :], (grid.nx, grid.ny, 1))
-
-        lwc_data[mask==0] = 0
-        return shdom.GridData(grid, lwc_data)
     def load_forward_model(self, input_directory):
         """
         Load the ground-truth medium, rte_solver and measurements which define the forward model
