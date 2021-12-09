@@ -1,49 +1,21 @@
-# pyshdom
+# 4D Cloud Scattering Tomography
+[![arXiv](https://img.shields.io/static/v1?label=ICCV2021&message=4DCloudScatteringTomography&color=blueviolet)](https://openaccess.thecvf.com/content/ICCV2021/papers/Ronen_4D_Cloud_Scattering_Tomography_ICCV_2021_paper.pdf)
 
-Pyshdom performs 3D reconstruction of cloud microphysical properties from multi-angle, multi-spectral solar reflected radiation using a non-linear optimization procedure [[1],[2]]. The core radiative transfer routines are sourced from the Fortran SHDOM (Spherical Harmonic Discrete Ordinate Method for 3D Atmospheric Radiative Transfer) code by Frank K. Evans [[3]]. The python package was created by Aviad Levis, Amit Aides (Technion - Israel Institute of Technology) and Jesse Loveridge (University of Illinois).
+## Abstract
+We derive computed tomography (CT) of a time-varying volumetric scattering object, using a small number of moving cameras. We focus on passive tomography of dynamic clouds, as clouds have a major effect on the Earth's climate. State of the art scattering CT assumes a static object. Existing 4D CT methods rely on a linear image formation model and often on significant priors. In this paper, the angular and temporal sampling rates needed for a proper recovery are discussed. Spatiotemporal CT is achieved using gradient-based optimization, which accounts for the correlation time of the dynamic object content. We demonstrate this in physics-based simulations and on experimental real-world data.
+![4DcloudScatteringTomography](4DcloudScatteringTomography.png)
 
-[1]: http://openaccess.thecvf.com/content_iccv_2015/html/Levis_Airborne_Three-Dimensional_Cloud_ICCV_2015_paper.html
-[2]: http://openaccess.thecvf.com/content_cvpr_2017/html/Levis_Multiple-Scattering_Microphysics_Tomography_CVPR_2017_paper.html
-[3]: http://coloradolinux.com/~evans/shdom.html
+## Description
+This repository contains the official implementation of 4D Cloud Scattering Tomography, which is implemented ontop of Pyshdom3.0 package[1].
+Our framework recovers 4D cloud microphysics fields, using small number of moving cameras. It relies on the natural temporal evolution of clouds for weighing gradients of different time steps.
+sampling needed for a good reconstruction. 
 
-&nbsp;
 
-## Features
+[1]: https://github.com/aviadlevis/pyshdom.html
 
-At present pyshdom has the following features:
-
-* Mie & Rayleigh scattering optical property calculations. Optical properties of other species (e.g. non-spherical ice or aerosol) can be included but must be calculated externally.
-* Cloud data of varying complexity can be generated or read from LES output.
-* Scalar radiative transfer from SHDOM with Perspective or Orthographic sensor geometries and Lambertian Surface.
-* Each SHDOM solution is serial but independent wavelengths and pixel radiance calculations are
-parallelised in a shared memory framework.
-* Local & Global optimization procedures for recovery of cloud microphysical properties (liquid water content,
-droplet effective radius, droplet effective variance) on 3D (or reduced order) grids from simulated (or observed) radiances.
-* The calculation of optical properties and each SHDOM solution have been streamlined to minimize computational resources
-necessary at each iteration of the optimization routines.
-
-Future Improvements:
-
-* Implement vector SHDOM to include polarisation information in the optimization.
-* Add additional sensor geometries (cross-track scan, push-broom) & expand to other surface types in SHDOM.
-* Include a more flexible parallelisation scheme.
-* Add useful regularisation options in the optimization procedure.
-* Add further accelerations for computational efficiency.
-* Include gaseous absorption for greater realism.
 
 &nbsp;
 
-## Updates in pyshdom3.0
- - Code migration to python3
- - Multispectral rendering and optimization
- - Microphysical optimization
- - Single scattering derivatives are exact (along broken ray paths)
- - Main changes to SHDOM core Fortran code: 
-     1. Removal of global variables (property array)
-     2. Particle mixing is done at runtime and not as an a-priori computation 
-     4. Mie computations are broken down to mono-disperse and poly-disperse
-
-&nbsp;
 
 ## Installation 
 Installation using using anaconda package management
@@ -66,7 +38,7 @@ python setup.py install
 
 &nbsp;
 
-## Basic usage
+## Usage
 For basic usage follow the following jupyter notebook tutorials
 - notebooks/Radiance Rendering [Single Image].ipynb
 - notebooks/Radiance Rendering [Multiview].ipynb
