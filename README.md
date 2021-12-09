@@ -77,7 +77,7 @@ For microphysics estimation (LWC and Reff) use
 python 4D_cloud_scattering_tomography/scripts/optimize_dynamic_microphysics_lbfgs.py --input_dir PATH_TO_DATA --add_rayleigh --use_forward_cloud_velocity --use_forward_grid --const_veff --const_reff --one_dim_reff --init Homogeneous --n_jobs 72 --log LOG_DIR --maxiter 100 --use_cross_validation -1 --num_mediums -1 --reg_const 1 --sigma 20 --lwc 0.06 --reff 6
 
 Set different values of sigma for 4D recovery. Manually choose space_carve_agreement and radiance_threshold values according to the generated data (single platform or 2 or 3 satellites). Static recovery can be obtained by setting sigma=0, num_mediums=1 and reg_const=0.
-
+```
 &nbsp;
 
 ### AirMSPI
