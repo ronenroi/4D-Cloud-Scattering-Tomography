@@ -75,19 +75,31 @@ python 4D_cloud_scattering_tomography/scripts/optimize_dynamic_extinction_lbfgs.
 For microphysics estimation (LWC and Reff) use
 ```
 python 4D_cloud_scattering_tomography/scripts/optimize_dynamic_microphysics_lbfgs.py --input_dir PATH_TO_DATA --add_rayleigh --use_forward_cloud_velocity --use_forward_grid --const_veff --const_reff --one_dim_reff --init Homogeneous --n_jobs 72 --log LOG_DIR --maxiter 100 --use_cross_validation -1 --num_mediums -1 --reg_const 1 --sigma 20 --lwc 0.06 --reff 6
+```
 
 Set different values of sigma for 4D recovery. Manually choose space_carve_agreement and radiance_threshold values according to the generated data (single platform or 2 or 3 satellites). Static recovery can be obtained by setting sigma=0, num_mediums=1 and reg_const=0.
-```
+
 &nbsp;
 
 ### AirMSPI
-Data preparation and preprocessing
+Data preparation and preprocessing 
 
-screen python Develop_Dynamic_cloud/scripts/optimize_dynamic_extinction_AirMSPI_lbfgs.py --input_dir Develop_Dynamic_cloud/experiments/AirMSPI/dynamic_medium/monochromatic --add_rayleigh --use_forward_cloud_velocity --use_forward_grid --init Homogeneous --extinction 1 --space_carve_agreement 0.9 --log log_num_mediums_1  --radiance_threshold -0.03 --n_jobs 72 --maxiter 100 --reg_const 0 --use_cross_validation -1 --num_mediums 1 --sigma 0 --nx 50 --ny 50 --nz 50
+```
+4D-Cloud-Scattering-Tomography/AirMSPI/develop_AirMSPI_load.ipynb
+```
 
- screen python Develop_Dynamic_cloud/scripts/optimize_dynamic_extinction_AirMSPI_lbfgs.py --input_dir Develop_Dynamic_cloud/experiments/AirMSPI/dynamic_medium/monochromatic --add_rayleigh --init Homogeneous --space_carve_agreement 0.9 --radiance_threshold -0.03 --ext 1 --nx 80 --ny 80 --nz 80 --log cvpr_num_mediums_21_sigma_60 --n_jobs 72 --maxiter 200 --reg_const 1 --use_cross_validation -1 --num_mediums -1 --sigma 60
+Results reproducing for 4D recovery
 
+```
+python4D-Cloud-Scattering-Tomography/scripts/optimize_dynamic_extinction_AirMSPI_lbfgs.py --input_dir 4D-Cloud-Scattering-Tomography/experiments/AirMSPI/dynamic_medium/monochromatic --add_rayleigh --init Homogeneous --space_carve_agreement 0.9 --radiance_threshold -0.03 --ext 1 --nx 80 --ny 80 --nz 80 --log LOG_DIR --n_jobs 72 --maxiter 200 --reg_const 1 --use_cross_validation -1 --num_mediums -1 --sigma 60
+```
 
+and for static 3D
+```
+python4D-Cloud-Scattering-Tomography/scripts/optimize_dynamic_extinction_AirMSPI_lbfgs.py --input_dir 4D-Cloud-Scattering-Tomography/experiments/AirMSPI/dynamic_medium/monochromatic --add_rayleigh --init Homogeneous --space_carve_agreement 0.9 --radiance_threshold -0.03 --ext 1 --nx 80 --ny 80 --nz 80 --log LOG_DIR --n_jobs 72 --maxiter 200 --reg_const 0 --use_cross_validation -1 --num_mediums 1 --sigma 0
+```
+
+For cross validation comparison set use_cross_validation as the index of the left out image.  
 &nbsp;
 
 
