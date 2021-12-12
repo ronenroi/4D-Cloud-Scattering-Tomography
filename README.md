@@ -106,6 +106,8 @@ python4D-Cloud-Scattering-Tomography/scripts/optimize_dynamic_extinction_AirMSPI
 For cross validation comparison set use_cross_validation as the index of the left out image.  
 &nbsp;
 
+## Results from paper
+A video of the paper's results visualisation can be found [here](https://technionmail-my.sharepoint.com/:v:/g/personal/roironen_campus_technion_ac_il/EbAITtYku_BArswQOYWA-LEBajQRhTVA2I0VarLZOt7POw?e=0J13JD). The official results can be downloaded from this [link](https://technionmail-my.sharepoint.com/:f:/g/personal/roironen_campus_technion_ac_il/Ej_UEkddkkVAjh1ZC3fm1SUB9kcHszfWNEIFfaCJFPqK7A?e=nOAvcl).
 
 ## Citation
 If you make use of our work, please cite our paper:
