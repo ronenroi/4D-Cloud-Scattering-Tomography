@@ -7,10 +7,12 @@ We derive computed tomography (CT) of a time-varying volumetric scattering objec
 
 ## Description
 This repository contains the official implementation of 4D Cloud Scattering Tomography, which is implemented ontop of Pyshdom3.0 package [[1]].
-Our framework recovers 4D cloud microphysics fields, using a small number of moving cameras. We exploits the natural temporal evolution of clouds for weighing the gradients of the different time steps for the recovery process.
+Our framework recovers 4D cloud microphysics fields, using a small number of moving cameras. We exploits the natural temporal evolution of clouds for weighing the gradients of the different time steps during the recovery process. For more details see our paper [[2]] and supplementary material [[3]].
 
 
 [1]: https://github.com/aviadlevis/pyshdom
+[2]: https://openaccess.thecvf.com/content/ICCV2021/papers/Ronen_4D_Cloud_Scattering_Tomography_ICCV_2021_paper.pdf
+[3]: https://openaccess.thecvf.com/content/ICCV2021/supplemental/Ronen_4D_Cloud_Scattering_ICCV_2021_supplemental.pdf
 
 
 &nbsp;
@@ -82,8 +84,8 @@ Set different values of sigma for 4D recovery. Manually choose space_carve_agree
 &nbsp;
 
 ### AirMSPI
-Data preparation and preprocessing 
-
+Data preparation and preprocessing: Download [here](https://technionmail-my.sharepoint.com/:f:/g/personal/roironen_campus_technion_ac_il/EpqZczvgj05NpC2JGPO8kjwBrI77-v5JKC9Cw7gJFkiPFA?e=W4nTS9)  the data and place it in AirMSPI/21views.
+Then process and generate the data with the following notebook
 ```
 4D-Cloud-Scattering-Tomography/AirMSPI/develop_AirMSPI_load.ipynb
 ```
@@ -94,7 +96,7 @@ Results reproducing for 4D recovery
 python4D-Cloud-Scattering-Tomography/scripts/optimize_dynamic_extinction_AirMSPI_lbfgs.py --input_dir 4D-Cloud-Scattering-Tomography/experiments/AirMSPI/dynamic_medium/monochromatic --add_rayleigh --init Homogeneous --space_carve_agreement 0.9 --radiance_threshold -0.03 --ext 1 --nx 80 --ny 80 --nz 80 --log LOG_DIR --n_jobs 72 --maxiter 200 --reg_const 1 --use_cross_validation -1 --num_mediums -1 --sigma 60
 ```
 
-and for static 3D
+and for static 3D results
 ```
 python4D-Cloud-Scattering-Tomography/scripts/optimize_dynamic_extinction_AirMSPI_lbfgs.py --input_dir 4D-Cloud-Scattering-Tomography/experiments/AirMSPI/dynamic_medium/monochromatic --add_rayleigh --init Homogeneous --space_carve_agreement 0.9 --radiance_threshold -0.03 --ext 1 --nx 80 --ny 80 --nz 80 --log LOG_DIR --n_jobs 72 --maxiter 200 --reg_const 0 --use_cross_validation -1 --num_mediums 1 --sigma 0
 ```
@@ -103,7 +105,31 @@ For cross validation comparison set use_cross_validation as the index of the lef
 &nbsp;
 
 
-## Usage and Contact
-If you find this package useful please let me know at aviad.levis@gmail.com, I am interested.
+## Citation
+If you make use of our work, please cite our paper:
+```
+@InProceedings{Ronen_2021_ICCV,
+    author    = {Ronen, Roi and Schechner, Yoav Y. and Eytan, Eshkol},
+    title     = {4D Cloud Scattering Tomography},
+    booktitle = {Proceedings of the IEEE/CVF International Conference on Computer Vision (ICCV)},
+    month     = {October},
+    year      = {2021},
+    pages     = {5520-5529}
+}
+```
+Thanks to Eshkol Eytan for the cloud simulation data. If you use it please cite:
+```
+@article{eytan2021revisiting,
+  title={Revisiting adiabatic fraction estimations in cumulus clouds: high-resolution simulations with a passive tracer},
+  author={Eytan, Eshkol and Koren, Ilan and Altaratz, Orit and Pinsky, Mark and Khain, Alexander},
+  journal={Atmospheric Chemistry and Physics},
+  volume={21},
+  number={21},
+  pages={16203--16217},
+  year={2021},
+  publisher={Copernicus GmbH}
+}
+```
+
 If you use this package in an academic publication please acknowledge the appropriate publications (see LICENSE file). 
 
