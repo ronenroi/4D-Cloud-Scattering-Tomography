@@ -8,6 +8,8 @@ We derive computed tomography (CT) of a time-varying volumetric scattering objec
 ## Description
 This repository contains the official implementation of 4D Cloud Scattering Tomography, which is implemented ontop of Pyshdom3.0 package [[1]].
 Our framework recovers 4D cloud microphysics fields, using a small number of moving cameras. We exploits the natural temporal evolution of clouds for weighing the gradients of the different time steps during the recovery process. For more details see our paper [[2]] and supplementary material [[3]].
+[![4DcloudScatteringTomography_video](youtube_screenshot.png](https://www.youtube.com/watch?v=_bfyfejJ7Xg&t=5s "4DcloudScatteringTomography_video")
+
 
 
 [1]: https://github.com/aviadlevis/pyshdom
