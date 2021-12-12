@@ -174,7 +174,7 @@ class AirMSPIMeasurements(shdom.Measurements):
         return cloud_base_h
 
     def load_from_hdf(self, data_dir, region_of_interest,
-                      valid_wavelength=[355, 380, 445, 470, 555, 660, 865, 935], sensor_type='Radiance'):
+                      valid_wavelength=[355, 380, 445, 470, 555, 660, 865, 935], sensor_type='Radiance', calc_env_parm=False):
         """
             Read AirMSPI data and build adequate projection according to SHDOM package.
 
@@ -210,8 +210,9 @@ class AirMSPIMeasurements(shdom.Measurements):
         self.set_images()
         self._pixels = self.images_to_pixels(self.images)
         self.set_sun_params()
-        # self.calc_albedo(n_jobs=72)
-        # self.calc_wind(n_jobs=72)
+        if calc_env_parm:
+            self.calc_albedo(n_jobs=72)
+            self.calc_wind(n_jobs=72)
         self.check_glint_angle()
 
     def set_region_of_interest(self, region_of_interest):
@@ -565,21 +566,17 @@ class AirMSPIMeasurements(shdom.Measurements):
         sensor = self.camera.sensor
         albedo_opt_res_list = []
         est_albedo_list =[]
-        for image, sun_azimuth, sun_zenith, projection,atmosphere in zip (self.images, self.sun_azimuth_list, self.sun_zenith_list,
-                                                               self._projections.projection_list,medium_list):
-            if threshold is None:
-                im_threshold = filters.threshold_isodata(image)
-            else:
-                im_threshold = threshold
-            albedo_opt_res = minimize_scalar(lambda albedo: self.calc_albedo_mse(albedo, wavelengths[0], sun_azimuth, sun_zenith,\
-                                                                      solar_flux, atmosphere, image, im_threshold, sensor,\
-                                                                       projection, n_jobs), bounds=(0, 0.1), method='bounded')
-            albedo_opt_res_list.append(albedo_opt_res)
-            est_albedo = albedo_opt_res.x
-            est_albedo_list.append(est_albedo)
+        # for image, sun_azimuth, sun_zenith, projection,atmosphere in zip (self.images, self.sun_azimuth_list, self.sun_zenith_list,
+        #                                                        self._projections.projection_list,medium_list):
+
+        albedo_opt_res = minimize_scalar(lambda albedo: self.calc_albedo_mse(albedo, wavelengths[0], self.sun_azimuth_list[0], self.sun_zenith_list[0],\
+                                                                  solar_flux, atmosphere, self.images, None, sensor,\
+                                                                   self._projections.projection_list, n_jobs), bounds=(0, 0.1), method='bounded')
+        albedo_opt_res_list.append(albedo_opt_res)
+        est_albedo = albedo_opt_res.x
+        est_albedo_list.append(est_albedo)
         self._albedo_opt_res_list = albedo_opt_res_list
         self._est_albedo_list = est_albedo_list
-
     @staticmethod
     def calc_albedo_mse(albedo, wavelength, sun_azimuth, sun_zenith, solar_flux, atmosphere, image, im_threshold,
                         sensor, projection, n_jobs=1):

@@ -1,7 +1,7 @@
 import os, time
 import numpy as np
 import shdom
-from Develop_Dynamic_cloud.scripts.optimize_dynamic_extinction_lbfgs import OptimizationScript as ExtinctionOptimizationScript
+from optimize_dynamic_extinction_lbfgs import OptimizationScript as ExtinctionOptimizationScript
 import sys
 from os.path import dirname
 sys.path.append(dirname(__file__))
@@ -229,14 +229,14 @@ class OptimizationScript(ExtinctionOptimizationScript):
             # reff = self.cloud_generator.get_reff(reff_grid)
             reff = []
             for m, r in zip(mask_list, reff_grid):
-                # reff.append(self.get_monotonous_reff(m.resample(r), 6.67, 3)) #cloud1
-                reff.append(self.get_monotonous_reff(m.resample(r), 7.71, 4, z0=reff_grid[0].z[18])) #cloud2
+                reff.append(self.get_monotonous_reff(m.resample(r), 6.67, 3)) #cloud1
+                # reff.append(self.get_monotonous_reff(m.resample(r), 7.71, 4, z0=reff_grid[0].z[18])) #cloud2
 
         else:
             rr=[]
             for m,r in zip(mask_list,reff_grid):
-                # rr.append (self.get_monotonous_reff(m.resample(r), 6.67, 3))#cloud1
-                rr.append (self.get_monotonous_reff(m.resample(r), 7.71, 4, z0=reff_grid[0].z[18]))#cloud2
+                rr.append (self.get_monotonous_reff(m.resample(r), 6.67, 3))#cloud1
+                # rr.append (self.get_monotonous_reff(m.resample(r), 7.71, 4, z0=reff_grid[0].z[18]))#cloud2
 
             reff = shdom.DynamicGridDataEstimator(rr,
                                            min_bound=0.01,
